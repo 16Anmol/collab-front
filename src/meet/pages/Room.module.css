@@ -1,0 +1,124 @@
+/* ── CoHustle Meet — Room Layout ─────────────────────────────────────────── */
+.layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+  font-family: var(--font-head);
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sidebar {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg2);
+  border-left: 1px solid var(--border);
+}
+
+/* ── Top bar ──────────────────────────────────────────────────────────────── */
+.topBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1.5rem;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  min-height: 54px;
+}
+
+.logo {
+  font-family: var(--font-head);
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--accent2);
+  letter-spacing: 0.03em;
+}
+
+.roomInfo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.dotGreen { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.dotAmber { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+
+.roomCode {
+  font-family: 'Courier New', monospace;
+  font-size: 0.78rem;
+  color: var(--text3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  letter-spacing: 0.06em;
+}
+
+.peerCount {
+  font-size: 0.8rem;
+  color: var(--text3);
+  font-weight: 500;
+}
+
+/* ── Video area ───────────────────────────────────────────────────────────── */
+.videoArea {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  background: var(--bg);
+  position: relative;
+  gap: 10px;
+}
+
+.grid {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Toast ────────────────────────────────────────────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 90px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 99px;
+  padding: 0.55rem 1.3rem;
+  font-size: 0.84rem;
+  color: var(--text);
+  z-index: 300;
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+  animation: fadeUp 0.25s ease;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
