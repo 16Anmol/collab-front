@@ -77,37 +77,41 @@ export default function Room() {
 
   const toggleScreen = async () => {
     if (screenSharing) {
+      // Stop the screen track
       screenTrackRef.current?.stop();
       screenTrackRef.current = null;
+      // stopScreenShare restores camera in PeerConnections and localStreamRef
       await stopScreenShare();
       setScreenSharing(false);
-      // Restore camera stream in local preview
-      if (localStream) {
-        setLocalStream(new MediaStream([...localStream.getTracks()]));
+      // Rebuild local preview from the now-restored localStreamRef
+      if (localStreamRef.current) {
+        setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
       }
     } else {
       const track = await startScreenShare();
       if (track) {
         screenTrackRef.current = track;
         setScreenSharing(true);
-        // Show screen in local preview tile
-        const screenStream = new MediaStream([track]);
-        if (localStream) {
-          // Keep audio tracks, replace video with screen
-          localStream.getAudioTracks().forEach(t => screenStream.addTrack(t));
-        }
-        setLocalStream(screenStream);
-        track.onended = () => {
+        // Update local preview to show screen
+        const previewStream = new MediaStream([track]);
+        localStreamRef.current?.getAudioTracks().forEach(t => previewStream.addTrack(t));
+        setLocalStream(previewStream);
+        // When user clicks browser's "Stop sharing" button
+        track.onended = async () => {
           setScreenSharing(false);
           screenTrackRef.current = null;
-          stopScreenShare();
-          // Restore original camera
-          navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-            .then(stream => setLocalStream(stream))
-            .catch(() => {});
+          await stopScreenShare();
+          // Restore local preview
+          if (localStreamRef.current) {
+            setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+          } else {
+            navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+              .then(stream => { setLocalStream(stream); })
+              .catch(() => {});
+          }
         };
       } else {
-        showToast('Screen share was cancelled or not allowed.');
+        showToast('Screen share was cancelled or denied by browser.');
       }
     }
   };

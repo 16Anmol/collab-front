@@ -353,6 +353,10 @@ export const milestonesApi = {
 export const ratingsApi = {
   submit: (data: { applicationId: string; rating: number; comment?: string }) =>
     request<Rating>("/ratings", { method: "POST", body: JSON.stringify(data) }),
+  submitByUser: (data: { revieweeId: string; rating: number; comment?: string }) =>
+    request<Rating>("/ratings/by-user", { method: "POST", body: JSON.stringify(data) }),
+  getGiven: () =>
+    request<{ ratings: Rating[] }>("/ratings/given"),
 
   getMine: () => request<{ ratings: Rating[]; averageRating: string | null; totalRatings: number }>("/ratings/mine"),
 

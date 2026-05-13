@@ -18,6 +18,7 @@ export function useWebRTC({ roomId, myName, onChat, onReaction, onRaiseHand }) {
   const wsRef = useRef(null);
   const pcsRef = useRef({}); // peer_id → RTCPeerConnection
   const localStreamRef = useRef(null);
+  const origCamTrackRef = useRef(null); // stores original camera track for restoring after screen share
   const pendingCandidates = useRef({}); // peer_id → [candidates before remote desc]
 
   // ── helpers ─────────────────────────────────────────────────────────────
@@ -53,25 +54,37 @@ export function useWebRTC({ roomId, myName, onChat, onReaction, onRaiseHand }) {
     const pc = new RTCPeerConnection(ICE_SERVERS);
     pcsRef.current[peerId] = pc;
 
-    // Add local tracks
-    if (localStreamRef.current) {
+    // Always add a video transceiver so replaceTrack works for screen share
+    // even when no camera is available
+    const hasLocalStream = localStreamRef.current && localStreamRef.current.getTracks().length > 0;
+    if (hasLocalStream) {
       localStreamRef.current.getTracks().forEach(t => pc.addTrack(t, localStreamRef.current));
+    } else {
+      // No camera/mic - add a sendrecv transceiver anyway so screen share can replaceTrack later
+      pc.addTransceiver('video', { direction: 'sendrecv' });
+      pc.addTransceiver('audio', { direction: 'sendrecv' });
     }
 
     // Remote stream handling
     let remoteStream = new MediaStream();
     pc.ontrack = e => {
-      console.log('[WebRTC] ontrack fired:', e.track.kind, 'from peer:', peerId);
-      // Add track to our stream
+      if (!e.track) return;
+      console.log('[WebRTC] ontrack fired:', e.track.kind, 'readyState:', e.track.readyState, 'from peer:', peerId);
+
+      // Remove existing track of same kind and add new one
+      remoteStream.getTracks()
+        .filter(t => t.kind === e.track.kind)
+        .forEach(t => remoteStream.removeTrack(t));
       remoteStream.addTrack(e.track);
-      // Use new object reference so React detects change
-      const updated = new MediaStream(remoteStream.getTracks());
-      updatePeer(peerId, { stream: updated });
-      // Handle track ending
+
+      updatePeer(peerId, { stream: new MediaStream(remoteStream.getTracks()) });
+
+      e.track.onmute = e.track.onunmute = () => {
+        updatePeer(peerId, { stream: new MediaStream(remoteStream.getTracks()) });
+      };
       e.track.onended = () => {
         remoteStream.removeTrack(e.track);
-        const updated2 = new MediaStream(remoteStream.getTracks());
-        updatePeer(peerId, { stream: updated2 });
+        updatePeer(peerId, { stream: new MediaStream(remoteStream.getTracks()) });
       };
     };
 
@@ -96,14 +109,17 @@ export function useWebRTC({ roomId, myName, onChat, onReaction, onRaiseHand }) {
       }
     };
 
-    // Negotiate (for polite peer)
-    if (polite) {
-      pc.onnegotiationneeded = async () => {
+    // Negotiate - both polite and impolite peers need to handle onnegotiationneeded
+    // Polite peer negotiates freely; impolite peer only negotiates if signaling is stable
+    pc.onnegotiationneeded = async () => {
+      try {
+        if (!polite && pc.signalingState !== 'stable') return; // impolite: wait for stability
         const offer = await pc.createOffer();
+        if (pc.signalingState !== 'stable') return; // check again after async
         await pc.setLocalDescription(offer);
         send({ type: 'offer', target: peerId, sdp: pc.localDescription });
-      };
-    }
+      } catch (e) { console.warn('[WebRTC] onnegotiationneeded error:', e); }
+    };
 
     return pc;
   }, [send, updatePeer, removePeer]);
@@ -163,7 +179,9 @@ export function useWebRTC({ roomId, myName, onChat, onReaction, onRaiseHand }) {
       }
 
       case 'offer': {
-        const pc = createPC(msg.from, false);
+        // Use existing PC if available (renegotiation), create new one if first time
+        const existingPc = pcsRef.current[msg.from];
+        const pc = existingPc || createPC(msg.from, false);
         await pc.setRemoteDescription(msg.sdp);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
@@ -254,23 +272,38 @@ export function useWebRTC({ roomId, myName, onChat, onReaction, onRaiseHand }) {
 
   const startScreenShare = useCallback(async () => {
     try {
-      const screen = await navigator.mediaDevices.getDisplayMedia({
-        video: { cursor: 'always' },
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { cursor: 'always', width: { ideal: 1920 }, height: { ideal: 1080 } },
         audio: false,
       });
-      const screenTrack = screen.getVideoTracks()[0];
+      const screenTrack = screenStream.getVideoTracks()[0];
 
-      // Replace or add video track in all peer connections
-      for (const pc of Object.values(pcsRef.current)) {
-        const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-        if (sender) {
-          await sender.replaceTrack(screenTrack);
-        } else {
-          // No video sender yet — add it
-          if (localStreamRef.current) {
-            pc.addTrack(screenTrack, localStreamRef.current);
+      // Save the original camera track so we can restore it later
+      const camTrack = localStreamRef.current?.getVideoTracks()[0] || null;
+      origCamTrackRef.current = camTrack;
+
+      // Update localStreamRef so PeerConnections use screen track
+      if (localStreamRef.current) {
+        // Remove old video tracks, add screen track
+        localStreamRef.current.getVideoTracks().forEach(t => localStreamRef.current.removeTrack(t));
+        localStreamRef.current.addTrack(screenTrack);
+      }
+
+      // Replace video track in every peer connection using replaceTrack
+      // (transceivers are always present due to createPC guaranteeing them)
+      for (const [peerId, pc] of Object.entries(pcsRef.current)) {
+        try {
+          const videoSender = pc.getSenders().find(s => s.track?.kind === 'video' || s.track === null);
+          if (videoSender) {
+            await videoSender.replaceTrack(screenTrack);
+          } else {
+            // Last resort: add track and renegotiate
+            pc.addTrack(screenTrack);
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            send({ type: 'offer', target: peerId, sdp: pc.localDescription });
           }
-        }
+        } catch(e) { console.error('[ScreenShare] Failed for peer', peerId, e); }
       }
 
       send({ type: 'media-state', screen: true });
@@ -284,12 +317,34 @@ export function useWebRTC({ roomId, myName, onChat, onReaction, onRaiseHand }) {
   }, [send]);
 
   const stopScreenShare = useCallback(async () => {
-    const camTrack = localStreamRef.current?.getVideoTracks()[0];
-    if (!camTrack) return;
-    Object.values(pcsRef.current).forEach(pc => {
-      const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-      if (sender) sender.replaceTrack(camTrack);
-    });
+    // Restore original camera track (or get a new one if needed)
+    let camTrack = origCamTrackRef.current;
+    
+    if (!camTrack || camTrack.readyState === 'ended') {
+      // Original camera track ended - request a new one
+      try {
+        const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        camTrack = newStream.getVideoTracks()[0];
+      } catch {
+        camTrack = null;
+      }
+    }
+
+    // Restore in localStreamRef
+    if (localStreamRef.current && camTrack) {
+      localStreamRef.current.getVideoTracks().forEach(t => localStreamRef.current.removeTrack(t));
+      localStreamRef.current.addTrack(camTrack);
+    }
+
+    // Restore in all peer connections
+    for (const pc of Object.values(pcsRef.current)) {
+      const sender = pc.getSenders().find(s => s.track?.kind === 'video' || s.track === null);
+      if (sender) {
+        await sender.replaceTrack(camTrack || null);
+      }
+    }
+
+    origCamTrackRef.current = null;
     send({ type: 'media-state', screen: false });
   }, [send]);
 
